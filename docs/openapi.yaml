@@ -1,0 +1,324 @@
+openapi: 3.0.3
+info:
+  title: Fleet Management System API
+  version: 1.0.0
+  description: |
+    All requests go through the **API Gateway**. Every `/api/*` call needs an `x-api-key` header.
+    Most endpoints additionally need a JWT (`Authorization: Bearer <token>`) obtained from `POST /api/users/login`.
+
+    Demo users: `admin/admin123`, `operator/operator123`, `driver/driver123`. Demo API key: `fleet-demo-key-123`.
+    Click **Authorize** and fill in both `ApiKeyAuth` and `BearerAuth`.
+servers:
+  - url: http://localhost:3000
+security:
+  - ApiKeyAuth: []
+tags:
+  - name: Users
+  - name: Vehicles
+  - name: Telemetry
+  - name: Maps
+  - name: Notifications
+  - name: Gateway
+paths:
+  /health:
+    get:
+      tags: [Gateway]
+      summary: Gateway health check (no API key needed)
+      security: []
+      responses:
+        '200': { description: OK }
+  /api/users/login:
+    post:
+      tags: [Users]
+      summary: Login and receive a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { username: admin, password: admin123 }
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+              example: { token: eyJhbGciOi..., user: { id: 1, username: admin, role: admin } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
+  /api/users/register:
+    post:
+      tags: [Users]
+      summary: Create a user (admin only)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            example: { username: sam, password: secret1, role: driver, phone: '+919800000000' }
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Username exists, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/users/me:
+    get:
+      tags: [Users]
+      summary: Current user from the JWT
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      responses:
+        '200': { description: Decoded token claims }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List users (admin only)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      responses:
+        '200': { description: Users, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/User' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/vehicles:
+    post:
+      tags: [Vehicles]
+      summary: Register a vehicle (admin/operator). If `address` is given and no coordinates, it is geocoded.
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehicleInput' }
+            example: { plate: BR02-1234, model: Tata Ace, address: 'Gaya, Bihar' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Vehicle' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Duplicate plate }
+    get:
+      tags: [Vehicles]
+      summary: List vehicles
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/VehicleStatus' } }
+      responses:
+        '200': { description: Vehicles, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Vehicle' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/vehicles/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Vehicles]
+      summary: Get one vehicle
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      responses:
+        '200': { description: Vehicle, content: { application/json: { schema: { $ref: '#/components/schemas/Vehicle' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Vehicles]
+      summary: Delete a vehicle (admin only)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/vehicles/{id}/status:
+    patch:
+      tags: [Vehicles]
+      summary: Change operational status (admin/operator). Triggers an SMS to admins and the vehicle owner.
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties: { status: { $ref: '#/components/schemas/VehicleStatus' } }
+            example: { status: maintenance }
+      responses:
+        '200': { description: Updated vehicle plus notification result }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/telemetry:
+    post:
+      tags: [Telemetry]
+      summary: Submit telemetry / GPS fix. Critical events (engine_fault, emergency_stop, low_battery or battery < 15) trigger SMS to admins.
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelemetryInput' }
+            example: { vehicle_id: 1, latitude: 24.7914, longitude: 85.0002, speed: 42.5, battery: 9, event: engine_fault }
+      responses:
+        '201': { description: Stored }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/telemetry/{vehicleId}:
+    get:
+      tags: [Telemetry]
+      summary: Telemetry history for a vehicle (newest first)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
+      responses:
+        '200': { description: Records, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TelemetryRecord' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/maps/geocode:
+    get:
+      tags: [Maps]
+      summary: Address to latitude/longitude (OpenStreetMap Nominatim)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: address, in: query, required: true, schema: { type: string }, example: 'Gaya, Bihar' }
+      responses:
+        '200':
+          description: Coordinates
+          content:
+            application/json:
+              example: { latitude: 24.7914, longitude: 85.0002, display_name: 'Gaya, Bihar' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '502': { description: Geocoding provider failed }
+  /api/maps/nearby:
+    get:
+      tags: [Maps]
+      summary: Vehicles within `radius` km of a point (give lat+lon, or an address)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: lat, in: query, schema: { type: number } }
+        - { name: lon, in: query, schema: { type: number } }
+        - { name: address, in: query, schema: { type: string } }
+        - { name: radius, in: query, schema: { type: number, default: 5 }, description: Kilometres }
+      responses:
+        '200':
+          description: Vehicles sorted by distance
+          content:
+            application/json:
+              example:
+                center: { latitude: 24.7914, longitude: 85.0002 }
+                radius_km: 5
+                count: 1
+                vehicles: [{ id: 1, plate: BR02-1234, status: idle, latitude: 24.80, longitude: 85.01, distance_km: 1.4 }]
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/maps/locations:
+    get:
+      tags: [Maps]
+      summary: All vehicle positions (used by the map UI)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      responses:
+        '200': { description: Locations }
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Notification log with sent/failed status (admin/operator)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [sent, failed] } }
+        - { name: vehicle_id, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: Log, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Notification' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/notifications/send:
+    post:
+      tags: [Notifications]
+      summary: Send a manual SMS via the mock provider (admin/operator)
+      security: [{ ApiKeyAuth: [], BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { to: '+919800000000', message: Please report to depot }
+      responses:
+        '201': { description: Sent }
+        '502': { description: Provider failed (recorded as failed) }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    ApiKeyAuth: { type: apiKey, in: header, name: x-api-key }
+    BearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  responses:
+    BadRequest: { description: Invalid request, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: Missing/invalid API key or JWT, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Role not allowed / invalid API key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    TooMany: { description: Rate limit exceeded (429), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    Error: { type: object, properties: { error: { type: string } }, example: { error: Something went wrong } }
+    LoginRequest: { type: object, required: [username, password], properties: { username: { type: string }, password: { type: string } } }
+    LoginResponse: { type: object, properties: { token: { type: string }, user: { $ref: '#/components/schemas/User' } } }
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, minLength: 6 }
+        role: { type: string, enum: [admin, operator, driver], default: driver }
+        phone: { type: string, example: '+919800000000' }
+    User: { type: object, properties: { id: { type: integer }, username: { type: string }, role: { type: string }, phone: { type: string } } }
+    VehicleStatus: { type: string, enum: [idle, active, maintenance, offline, emergency_stop] }
+    VehicleInput:
+      type: object
+      required: [plate]
+      properties:
+        plate: { type: string }
+        model: { type: string }
+        address: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        owner_id: { type: integer }
+    Vehicle:
+      type: object
+      properties:
+        id: { type: integer }
+        plate: { type: string }
+        model: { type: string }
+        address: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        status: { $ref: '#/components/schemas/VehicleStatus' }
+        owner_id: { type: integer }
+        updated_at: { type: string }
+    TelemetryInput:
+      type: object
+      required: [vehicle_id, latitude, longitude]
+      properties:
+        vehicle_id: { type: integer }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        speed: { type: number }
+        battery: { type: number, minimum: 0, maximum: 100 }
+        event: { type: string, enum: [engine_fault, emergency_stop, low_battery] }
+    TelemetryRecord:
+      type: object
+      properties:
+        id: { type: integer }
+        vehicle_id: { type: integer }
+        latitude: { type: number }
+        longitude: { type: number }
+        speed: { type: number }
+        battery: { type: number }
+        event: { type: string }
+        recorded_at: { type: string }
+    Notification:
+      type: object
+      properties:
+        id: { type: integer }
+        recipient: { type: string }
+        message: { type: string }
+        reason: { type: string }
+        vehicle_id: { type: integer }
+        status: { type: string, enum: [sent, failed] }
+        created_at: { type: string }

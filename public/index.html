@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+ body{margin:0;font-family:system-ui,sans-serif}
+ #bar{display:flex;gap:8px;flex-wrap:wrap;padding:10px;background:#111827;color:#fff;align-items:center}
+ #bar input{padding:6px;border-radius:4px;border:0;width:110px}
+ #bar button{padding:6px 12px;border:0;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer}
+ #map{height:calc(100vh - 100px)} #msg{padding:6px 10px;font-size:14px;background:#f3f4f6;height:20px}
+</style></head><body>
+<div id="bar">
+ <b>Fleet Map</b>
+ <input id="key" placeholder="API key" value="fleet-demo-key-123">
+ <input id="user" placeholder="user" value="admin"><input id="pass" type="password" placeholder="pass" value="admin123">
+ <button onclick="login()">Login</button>
+ <span>|</span>
+ <input id="lat" placeholder="lat" value="24.7914"><input id="lon" placeholder="lon" value="85.0002"><input id="rad" placeholder="km" value="10" style="width:50px">
+ <button onclick="nearby()">Find nearby</button>
+ <button onclick="loadAll()">Show all</button>
+</div>
+<div id="msg">Login first.</div><div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map').setView([24.79, 85.0], 10);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+let token = '', layer = L.layerGroup().addTo(map), circle;
+const say = t => document.getElementById('msg').textContent = t;
+const api = async p => { const r = await fetch(p, {headers:{'x-api-key':key.value,Authorization:'Bearer '+token}}); if(!r.ok) throw new Error((await r.json()).error); return r.json(); };
+async function login(){
+  const r = await fetch('/api/users/login',{method:'POST',headers:{'content-type':'application/json','x-api-key':key.value},body:JSON.stringify({username:user.value,password:pass.value})});
+  const d = await r.json(); if(!r.ok) return say(d.error); token = d.token; say('Logged in as '+d.user.username); loadAll();
+}
+function draw(vs){ layer.clearLayers();
+  vs.forEach(v => L.marker([v.latitude,v.longitude]).bindPopup(`<b>${v.plate}</b><br>${v.status}${v.distance_km!=null?'<br>'+v.distance_km+' km away':''}`).addTo(layer));
+  if(vs.length) map.fitBounds(vs.map(v=>[v.latitude,v.longitude]),{maxZoom:13,padding:[40,40]});
+}
+async function loadAll(){ try{ const v = await api('/api/maps/locations'); draw(v); say(v.length+' vehicle(s)'); }catch(e){say(e.message)} }
+async function nearby(){ try{
+  const d = await api(`/api/maps/nearby?lat=${lat.value}&lon=${lon.value}&radius=${rad.value}`);
+  draw(d.vehicles); if(circle) map.removeLayer(circle);
+  circle = L.circle([lat.value,lon.value],{radius:rad.value*1000,color:'#2563eb'}).addTo(map);
+  say(`${d.count} vehicle(s) within ${d.radius_km} km`);
+}catch(e){say(e.message)} }
+</script></body></html>
